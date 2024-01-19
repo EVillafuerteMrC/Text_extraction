@@ -5,6 +5,16 @@ import numpy as np
 from tensorflow.keras.applications.vgg16 import VGG16, preprocess_input
 from tensorflow.keras.preprocessing import image
 from sklearn.metrics.pairwise import euclidean_distances
+from google.cloud import vision_v1
+from google.cloud.vision_v1 import types
+from PIL import Image, ImageDraw
+import io
+
+# Ruta a tu conjunto local de imágenes
+ruta_conjunto = r"C:\Users\EVillafuerte\Documents\IA PY\Fotos_vertex\images\train"
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = r"C:\Users\EVillafuerte\Documents\IA PY\mimetic-scion-407221-93093bee51a5.json"
+imagen_a_analizar = "Fotos_vertex/images/train/Transaccion_PCH2.jpg"
+
 
 
 def cargar_imagenes(ruta, target_size=(400, 600)):
@@ -14,29 +24,27 @@ def cargar_imagenes(ruta, target_size=(400, 600)):
         if archivo.endswith(".jpg") or archivo.endswith(".png"):
             ruta_completa = os.path.join(ruta, archivo)
             imagen = cv2.imread(ruta_completa)
-            # Redimensionar la imagen al tamaño deseado (ajustar target_size según tus necesidades)
             imagen = cv2.resize(imagen, target_size)
             imagenes.append(imagen)
             nombres.append(archivo)
     return np.array(imagenes), nombres
+
+
 
 def extraer_caracteristicas(modelo, imagenes):
     imagenes_preprocesadas = preprocess_input(imagenes.copy())
     caracteristicas = modelo.predict(imagenes_preprocesadas)
     return caracteristicas
 
-# Ruta a tu conjunto local de imágenes
-ruta_conjunto = r"C:\Users\EVillafuerte\Documents\IA PY\Fotos_vertex\images\train"
 
-# Cargar imágenes del conjunto local con redimensionamiento
+
 conjunto_imagenes, nombres_conjunto = cargar_imagenes(ruta_conjunto)
 
 # Cargar un modelo preentrenado (VGG16 en este caso)
 modelo_base = VGG16(weights='imagenet', include_top=False)
 
-# Ruta a tu imagen de referencia
-ruta_referencia = "Fotos_vertex/images/train/Transaccion_PCH5.jpg"
-referencia = cv2.imread(ruta_referencia)
+
+referencia = cv2.imread(imagen_a_analizar)
 # Redimensionar la imagen de referencia al tamaño deseado
 referencia = cv2.resize(referencia, (400, 600))
 referencia = np.expand_dims(referencia, axis=0)
@@ -55,7 +63,39 @@ indice_similitud = np.argmin(distancias)
 porcentaje_coincidencia = 100 * (1 - distancias.min() / distancias.max())
 imagen_similar = nombres_conjunto[indice_similitud]
 
+def extraer_texto_google_vision_en_rectangulos_verdes(ruta_imagen, puntos_referencia):
+    client = vision_v1.ImageAnnotatorClient()
+
+    with io.open(ruta_imagen, 'rb') as image_file:
+        content = image_file.read()
+
+    image = types.Image(content=content)
+    response = client.text_detection(image=image)
+    texts = response.text_annotations
+
+    resultados_texto = []
+
+    for punto in puntos_referencia:
+        x, y, ancho, alto = punto
+        texto_rectangulo = []
+
+        # Verificar si el centro del texto está dentro de algún rectángulo verde
+        for text in texts:
+            centro_texto_x = (text.bounding_poly.vertices[0].x + text.bounding_poly.vertices[2].x) // 2
+            centro_texto_y = (text.bounding_poly.vertices[0].y + text.bounding_poly.vertices[2].y) // 2
+
+            if x - ancho // 2 <= centro_texto_x <= x + ancho // 2 and y - alto // 2 <= centro_texto_y <= y + alto // 2:
+                texto_rectangulo.append(text.description)
+
+        # Agregar el texto del rectángulo actual a los resultados
+        resultados_texto.append(" ".join(texto_rectangulo))
+    os.remove('TempImgFinal.png')
+    return resultados_texto
+    
+
+
 def encontrar_rectangulos_verdes(imagen):
+
     hsv = cv2.cvtColor(imagen, cv2.COLOR_BGR2HSV)
     verde_bajo = np.array([60, 40, 40])
     verde_alto = np.array([80, 255, 255])
@@ -85,25 +125,32 @@ def transferir_rectangulos(imagen_origen, imagen_destino, puntos_referencia):
 
     return imagen_destino
 
-# Cargar las imágenes
-
-# Encontrar rectángulos verdes en la imagen con rectángulos
-
 
 if porcentaje_coincidencia >= 85:
     print(f"La imagen más similar es: {imagen_similar} con un {porcentaje_coincidencia:.2f}% de coincidencia.")
 
     imagen_similar = cv2.imread("Fotos_vertex/images/labelsimg/"+imagen_similar)
-    ruta_referencia = cv2.imread(ruta_referencia)
+    imagen_a_analizar = cv2.imread(imagen_a_analizar)
 
     imagen_similar = cv2.resize(imagen_similar, (400, 600))
-    ruta_referencia = cv2.resize(ruta_referencia, (400, 600))
+    imagen_a_analizar = cv2.resize(imagen_a_analizar, (400, 600))
 
     puntos_referencia = encontrar_rectangulos_verdes(imagen_similar)
-    resultado = transferir_rectangulos(imagen_similar.copy(), ruta_referencia.copy(), puntos_referencia)  
+    resultado = transferir_rectangulos(imagen_similar.copy(), imagen_a_analizar.copy(), puntos_referencia)  
+    cv2.imwrite('TempImgFinal.png', resultado)
     cv2.imshow('Imagen Resultante', resultado)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
+
+
+    texto_extraido = extraer_texto_google_vision_en_rectangulos_verdes('TempImgFinal.png', puntos_referencia)
+
+    # Imprimir el texto extraído
+    print("Texto extraído de los rectángulos verdes en la imagen TempImgFinal:")
+    for i, texto in enumerate(texto_extraido):
+        if(texto):
+            print(f"{i+1}. {texto}")
+
 else:
     print(f"No se encontró una coincidencia con suficiente porcentaje. Porcentaje de coincidencia: {porcentaje_coincidencia:.2f}% con la imagen {imagen_similar}")
 
